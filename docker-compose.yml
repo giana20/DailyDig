@@ -1,0 +1,17 @@
+services:
+  dailydig:
+    build: .
+    container_name: dailydig
+    restart: unless-stopped
+    ports:
+      - "8090:8090"
+    env_file: .env
+    environment:
+      DD_CONFIG_DIR: /config
+      DD_MUSIC_DIR: /music
+    volumes:
+      - ./config:/config
+      # Your music library (the same folder Navidrome scans). DailyDig adds new tracks here, laid out
+      # like the rest of the library, and writes playlists to /music/_Playlists.
+      - /path/to/your/music:/music
+    mem_limit: 512m

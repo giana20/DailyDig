@@ -1,0 +1,33 @@
+# Secrets / local config
+.env
+config/
+*.db
+*.db-wal
+*.db-shm
+ranker.pkl
+ytm_headers.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local music/data folders
+music/
+_discovery/
+_playlists/
+
+# VS Code (keep shared settings, ignore personal state)
+.vscode/*
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# OS
+.DS_Store
+Thumbs.db

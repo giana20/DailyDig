@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dailydig</title>
+<style>
+:root{--bg:#0e0f12;--sf:#16181d;--sf2:#1c1f26;--bd:#272a33;--tx:#e8eaef;--mu:#8c93a3;--ac:#ff5a36;--ok:#4fd18b;--warn:#f2b441;--bad:#ff6b6b;--r:12px}
+@media (prefers-color-scheme:light){:root{--bg:#f6f6f4;--sf:#fff;--sf2:#f0f0ed;--bd:#dedcd6;--tx:#17181b;--mu:#6a6f7c;--ac:#e8431f}}
+*{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--bd)}
+.bar{max-width:1040px;margin:0 auto;padding:12px 16px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.brand{font-weight:700;letter-spacing:-.02em;font-size:17px}.brand b{color:var(--ac)}
+nav{display:flex;gap:2px;flex-wrap:wrap}nav button{background:none;border:0;color:var(--mu);padding:7px 11px;border-radius:8px;cursor:pointer;font:inherit}
+nav button.on{background:var(--sf2);color:var(--tx)}nav button:hover{color:var(--tx)}
+.chips{margin-left:auto;display:flex;gap:8px;font-size:12px;color:var(--mu)}
+main{max-width:1040px;margin:0 auto;padding:20px 16px 80px}
+h2{font-size:20px;letter-spacing:-.01em;margin:0 0 4px}.sub{color:var(--mu);margin:0 0 18px}
+.card{background:var(--sf);border:1px solid var(--bd);border-radius:var(--r);padding:16px;margin-bottom:14px}
+.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.grow{flex:1;min-width:0}
+button.b{background:var(--sf2);color:var(--tx);border:1px solid var(--bd);padding:7px 12px;border-radius:9px;cursor:pointer;font:inherit}
+button.b:hover{border-color:var(--mu)}button.p{background:var(--ac);border-color:var(--ac);color:#fff;font-weight:600}
+button.i{background:none;border:0;cursor:pointer;font-size:15px;opacity:.65;padding:4px 6px;border-radius:6px}button.i:hover{opacity:1;background:var(--sf2)}
+input,select{background:var(--sf2);color:var(--tx);border:1px solid var(--bd);border-radius:8px;padding:6px 9px;font:inherit}
+input[type=range]{padding:0;accent-color:var(--ac)}
+.trk{display:grid;grid-template-columns:28px 1fr auto auto;gap:10px;align-items:center;padding:10px 4px;border-top:1px solid var(--bd)}
+.trk:first-child{border-top:0}.n{color:var(--mu);font-variant-numeric:tabular-nums;text-align:right}
+.t{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.a{color:var(--mu);font-size:13px}.why{color:var(--mu);font-size:12px}
+.pill{font-size:11px;padding:2px 8px;border-radius:99px;background:var(--sf2);color:var(--mu);white-space:nowrap}
+.pill.delivered,.pill.downloaded,.pill.ok,.pill.healthy,.pill.promoted,.pill.library{color:var(--ok)}.pill.pending,.pill.downloading,.pill.degraded,.pill.approved,.pill.review{color:var(--warn)}
+.pill.failed,.pill.down{color:var(--bad)}.pill.disabled{opacity:.6}
+table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px 6px;border-top:1px solid var(--bd);font-size:13px}th{color:var(--mu);font-weight:500;border-top:0}
+.kv{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}.kv div{background:var(--sf2);border-radius:10px;padding:10px 12px}.kv b{display:block;font-size:20px;font-variant-numeric:tabular-nums}.kv span{color:var(--mu);font-size:12px}
+.sw{position:relative;width:36px;height:20px;background:var(--sf2);border:1px solid var(--bd);border-radius:99px;cursor:pointer;flex:none}.sw::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--mu);transition:.15s}.sw.on{background:var(--ac);border-color:var(--ac)}.sw.on::after{left:18px;background:#fff}
+.empty{color:var(--mu);padding:26px 8px;text-align:center}.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+label.f{display:flex;flex-direction:column;gap:4px;color:var(--mu);font-size:12px}
+.bar2{height:6px;background:var(--sf2);border-radius:9px;overflow:hidden}.bar2 i{display:block;height:100%;background:var(--ac)}
+#toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--tx);color:var(--bg);padding:9px 14px;border-radius:10px;opacity:0;pointer-events:none;transition:.2s}#toast.on{opacity:1}
+@media(max-width:560px){.trk{grid-template-columns:22px 1fr auto}.trk .pill{display:none}}
+</style>
+</head>
+<body>
+<header><div class="bar">
+  <div class="brand">daily<b>dig</b></div>
+  <nav id="nav"></nav>
+  <div class="chips" id="chips"></div>
+</div></header>
+<main id="main"></main>
+<div id="toast"></div>
+<script>
+const $=s=>document.querySelector(s);
+function el(tag,attrs,...kids){const e=document.createElement(tag);for(const[k,v]of Object.entries(attrs||{})){if(k==='class')e.className=v;else if(k.startsWith('on'))e.addEventListener(k.slice(2),v);else if(v!==false&&v!=null)e.setAttribute(k,v===true?'':v)}for(const k of kids.flat())if(k!=null)e.append(k.nodeType?k:document.createTextNode(String(k)));return e}
+async function api(path,opt){const r=await fetch('/api'+path,opt&&opt.body?{method:opt.method||'POST',headers:{'content-type':'application/json'},body:JSON.stringify(opt.body)}:opt);if(!r.ok){let d='';try{d=(await r.json()).detail}catch{}throw new Error(d||r.statusText)}return r.json()}
+const post=(p,b,m)=>api(p,{method:m||'POST',body:b||{}});
+function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('on');clearTimeout(toast.t);toast.t=setTimeout(()=>t.classList.remove('on'),2600)}
+const ago=ts=>{if(!ts)return'never';const s=Math.round(Date.now()/1000-ts);if(s<0){const f=-s;return'in '+(f<3600?Math.round(f/60)+'m':f<86400?Math.round(f/3600)+'h':Math.round(f/86400)+'d')}return(s<3600?Math.round(s/60)+'m':s<86400?Math.round(s/3600)+'h':Math.round(s/86400)+'d')+' ago'};
+const pill=(s)=>el('span',{class:'pill '+s},s);
+function sw(on,fn){const e=el('div',{class:'sw'+(on?' on':''),role:'switch',onclick:()=>{e.classList.toggle('on');fn(e.classList.contains('on'))}});return e}
+
+const pages={today,playlists,providers,downloader,taste,system};
+let cur=location.hash.slice(1)||'today';
+function nav(){const n=$('#nav');n.replaceChildren(...Object.keys(pages).map(k=>el('button',{class:k===cur?'on':'',onclick:()=>{cur=k;location.hash=k;nav();render()}},k[0].toUpperCase()+k.slice(1))))}
+async function render(){const m=$('#main');try{m.replaceChildren(await pages[cur]())}catch(e){m.replaceChildren(el('div',{class:'card'},'Something went wrong: '+e.message))}}
+
+async function today(){
+  const [d,st]=await Promise.all([api('/today'),api('/status')]);
+  const root=el('div');
+  root.append(el('div',{class:'row'},el('div',{class:'grow'},el('h2',{},'Today'),el('p',{class:'sub'},'Your Daily Dig, with the reason behind every pick.')),
+    el('button',{class:'b p',onclick:async()=>{const p=(await api('/playlists')).find(x=>x.kind==='daily_dig');const r=await post('/playlists/'+p.id+'/build');toast(r.queued?'Build queued':r.note);setTimeout(render,1500)}},d.build_running?'Building…':'Build now')));
+  if(!st.configured.listenbrainz_user)root.append(el('div',{class:'card'},el('b',{},'Set DD_LB_USER first. '),'DailyDig learns from your ListenBrainz history; without a username there is nothing to learn from yet.'));
+  const card=el('div',{class:'card'});
+  if(!d.tracks.length)card.append(el('div',{class:'empty'},d.build_running?'Building your first playlist…':'No playlist yet. Hit “Build now”.'));
+  d.tracks.forEach((t,i)=>card.append(el('div',{class:'trk'},el('div',{class:'n'},i+1),
+    el('div',{style:'min-width:0'},el('div',{class:'t'},t.title),el('div',{class:'a'},t.artist),el('div',{class:'why'},t.reason),t.error?el('div',{class:'why',style:'color:var(--warn)'},t.error):null),
+    pill(t.status),
+    el('div',{},
+      el('button',{class:'i',title:'More like this',onclick:()=>fb(t.id,'like')},'👍'),
+      el('button',{class:'i',title:'Not for me',onclick:()=>fb(t.id,'dislike')},'👎'),
+      el('button',{class:'i',title:'Block this artist',onclick:()=>fb(t.id,'block_artist')},'🚫')))));
+  root.append(card);return root}
+async function fb(id,action){try{await post('/feedback',{track_id:id,action});toast({like:'Saved. More like this.',dislike:'Got it.',block_artist:'Artist blocked.'}[action]);render()}catch(e){toast(e.message)}}
+
+async function playlists(){
+  const list=await api('/playlists');const root=el('div');
+  root.append(el('h2',{},'Playlists'),el('p',{class:'sub'},'Each playlist has its own schedule, size and rules. Changes apply on the next build.'));
+  for(const p of list){
+    const cfg=p.config,f={};const field=(k,label,node)=>{f[k]=node;return el('label',{class:'f'},label,node)};
+    const size=el('input',{type:'number',min:1,max:200,value:cfg.size||25});
+    const mode=el('select',{},...['safer','balanced','deeper'].map(m=>el('option',{value:m,selected:(cfg.mode||'balanced')===m},m)));
+    const expl=el('input',{type:'range',min:0,max:50,value:Math.round((cfg.exploration??.2)*100)});
+    const cron=el('input',{value:p.cron});
+    const isDisc=!cfg.source;
+    const counts=Object.entries(p.counts).map(([k,v])=>k+' '+v).join(' · ');
+    const save=async()=>{const c={size:+size.value};if(isDisc){c.mode=mode.value;c.exploration=expl.value/100}try{await post('/playlists/'+p.id,{schedule_cron:cron.value,config:c},'PATCH');toast('Saved')}catch(e){toast(e.message)}};
+    root.append(el('div',{class:'card'},
+      el('div',{class:'row'},el('div',{class:'grow'},el('b',{},p.name),el('div',{class:'why'},'last run '+ago(p.last_run)+' · next '+ago(p.next_run)+(counts?' · '+counts:''))),
+        sw(p.enabled,v=>post('/playlists/'+p.id,{enabled:v},'PATCH').then(()=>toast(v?'Enabled':'Disabled'))),
+        el('button',{class:'b',onclick:async()=>{const r=await post('/playlists/'+p.id+'/build');toast(r.queued?'Build queued':r.note)}},'Build now')),
+      el('div',{class:'grid2',style:'margin-top:12px'},field('size','Size',size),field('cron','Schedule (cron)',cron),
+        isDisc?field('mode','Mode',mode):null,isDisc?field('x','Exploration '+(cfg.exploration??.2)*100+'%',expl):null),
+      el('div',{class:'row',style:'margin-top:12px'},el('button',{class:'b',onclick:save},'Save'),
+        el('button',{class:'b',onclick:async()=>{const t=await api('/playlists/'+p.id+'/tracks');const box=el('div');t.forEach(x=>box.append(el('div',{class:'why'},x.position+1+'. '+x.artist+' — '+x.title+'  ['+x.status+']')));const c=root.querySelector('#tr'+p.id);if(c)c.remove();else{box.id='tr'+p.id;box.style.marginTop='10px';event.target.closest('.card').append(box)}}},'Tracks'))));
+  }
+  return root}
+
+async function providers(){
+  const l=await api('/providers');const root=el('div');
+  root.append(el('h2',{},'Providers'),el('p',{class:'sub'},'Failure ratios shrink a source’s fan-out automatically. Toggle any source off.'));
+  const t=el('table',{},el('tr',{},el('th',{},'Source'),el('th',{},'State'),el('th',{},'Failure ratio'),el('th',{},'Last error'),el('th',{},'On')));
+  l.forEach(p=>t.append(el('tr',{},el('td',{},p.name),el('td',{},pill(p.state)),el('td',{},p.failure_ratio+' ('+p.samples+')'),el('td',{class:'why'},p.last_error||'—'),el('td',{},sw(p.enabled,v=>post('/providers/'+p.name,{enabled:v},'PATCH').then(()=>{toast(p.name+(v?' on':' off'))}))))));
+  root.append(el('div',{class:'card'},t));return root}
+
+async function downloader(){
+  const d=await api('/downloader');const root=el('div');
+  root.append(el('h2',{},'Downloader'),el('p',{class:'sub'},'Every file is verified before it reaches Navidrome, whichever backend downloads it.'));
+  root.append(el('div',{class:'card kv'},el('div',{},el('b',{},d.backend_health.ok?'ready':'problem'),el('span',{},'backend · '+d.backend+(d.backend_health.detail?' · '+d.backend_health.detail:''))),
+    el('div',{},el('b',{},d.navidrome.configured?(d.navidrome.ok?'online':'unreachable'):'off'),el('span',{},'Navidrome')),
+    el('div',{},el('b',{},d.expire_days+' d'),el('span',{},'auto-expire (0 = keep)')),
+    el('div',{},el('b',{},d.format+' · '+d.concurrency+'×'),el('span',{},'format · parallel downloads')),
+    el('div',{},el('b',{style:'font-size:13px'},d.discovery_dir),el('span',{},'download folder'))));
+  const c=el('div',{class:'card'},el('b',{},'Review & failed'));
+  if(!d.review.length)c.append(el('div',{class:'empty'},'Nothing needs attention.'));
+  d.review.forEach(r=>c.append(el('div',{class:'trk',style:'grid-template-columns:1fr auto'},el('div',{},el('div',{class:'t'},r.artist+' — '+r.title),el('div',{class:'why'},r.error||'')),
+    el('div',{class:'row'},pill(r.status),r.status==='review'?el('button',{class:'b p',onclick:()=>post('/tracks/'+r.id+'/approve').then(()=>{toast('Approved');render()})},'Approve'):null,el('button',{class:'b',onclick:()=>post('/tracks/'+r.id+'/retry').then(()=>{toast('Retrying');render()}).catch(e=>toast(e.message))},'Retry')))));
+  root.append(c);return root}
+
+async function taste(){
+  const d=await api('/taste');const root=el('div');
+  root.append(el('h2',{},'Taste'),el('p',{class:'sub'},d.plays+' plays in the local history. Seeds are weighted toward what you played recently.'));
+  const mx=Math.max(...d.seeds.map(s=>s.weight),1);
+  const c=el('div',{class:'card'},el('b',{},'Top seed artists'));
+  if(!d.seeds.length)c.append(el('div',{class:'empty'},'No history yet. Run a sync from the System page.'));
+  d.seeds.forEach(s=>c.append(el('div',{style:'margin-top:10px'},el('div',{class:'row'},el('span',{class:'grow'},s.name),el('span',{class:'why'},s.mbid?'':'no MBID')),el('div',{class:'bar2'},el('i',{style:'width:'+Math.max(4,100*s.weight/mx)+'%'})))));
+  root.append(c);
+  root.append(el('div',{class:'card'},el('b',{},'Genre profile'),el('div',{class:'row',style:'margin-top:8px'},...(d.tags.length?d.tags.map(([t])=>el('span',{class:'pill'},t)):[el('span',{class:'why'},'Needs MusicBrainz data for your top artists.')]))));
+  const b=el('div',{class:'card'},el('b',{},'Blocked artists'));
+  if(!d.blocked_artists.length)b.append(el('div',{class:'why',style:'margin-top:6px'},'None.'));
+  d.blocked_artists.forEach(a=>b.append(el('div',{class:'row',style:'margin-top:6px'},el('span',{class:'grow'},a),el('button',{class:'b',onclick:()=>post('/feedback',{action:'unblock_artist',artist:a}).then(()=>{toast('Unblocked');render()})},'Unblock'))));
+  root.append(b);return root}
+
+async function system(){
+  const [s,st]=await Promise.all([api('/system'),api('/status')]);const root=el('div');
+  root.append(el('div',{class:'row'},el('div',{class:'grow'},el('h2',{},'System'),el('p',{class:'sub'},'v'+st.version)),
+    el('button',{class:'b',onclick:()=>post('/sync').then(()=>toast('Sync queued'))},'Sync listens now'),el('button',{class:'b',onclick:()=>post('/ranker/train').then(()=>toast('Training queued'))},'Train ranker')));
+  const k=(v,l)=>el('div',{},el('b',{},v),el('span',{},l));
+  root.append(el('div',{class:'card kv'},k(s.rss_mb?s.rss_mb+' MB':'—','memory (RSS)'),k(s.db_mb+' MB','database'),k(s.cache_entries,'cache entries'),k(s.plays,'plays stored'),
+    k(s.ranker&&s.ranker.trained?'B · AUC '+s.ranker.auc_holdout:'A (heuristic)','ranker tier')));
+  if(s.ranker&&!s.ranker.trained)root.append(el('div',{class:'card why'},'Personal ranker: '+s.ranker.reason));
+  const bt=el('table',{},el('tr',{},el('th',{},'Generator'),el('th',{},'Success rate'),el('th',{},'Evidence')));
+  if(!s.bandit.length)bt.append(el('tr',{},el('td',{colspan:3,class:'why'},'Appears once played / ignored tracks are labelled.')));
+  s.bandit.forEach(b=>bt.append(el('tr',{},el('td',{},b.arm),el('td',{},Math.round(b.mean*100)+'%'),el('td',{class:'why'},'α '+b.alpha+' / β '+b.beta))));
+  root.append(el('div',{class:'card'},el('b',{},'Source precision (bandit)'),bt));
+  const jt=el('table',{},el('tr',{},el('th',{},'#'),el('th',{},'Job'),el('th',{},'State'),el('th',{},'Try'),el('th',{},'Updated'),el('th',{},'Error')));
+  s.recent_jobs.forEach(j=>jt.append(el('tr',{},el('td',{},j.id),el('td',{},j.kind),el('td',{},pill(j.state==='done'?'ok':j.state==='running'?'pending':j.state)),el('td',{},j.attempts),el('td',{},ago(j.updated_at)),el('td',{class:'why'},j.error||''))));
+  root.append(el('div',{class:'card'},el('b',{},'Recent jobs'),jt));return root}
+
+nav();render();
+try{const es=new EventSource('/api/events');es.onmessage=e=>{const d=JSON.parse(e.data);const j=d.jobs||{};$('#chips').textContent=(j.running?j.running+' running · ':'')+(j.queued?j.queued+' queued':'idle');if(['today','downloader'].includes(cur)&&!es._busy){clearTimeout(es._t);es._t=setTimeout(render,600)}}}catch{}
+</script>
+</body>
+</html>
