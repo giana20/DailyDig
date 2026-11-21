@@ -1,13 +1,18 @@
 """Settings loaded from DD_* environment variables (see .env.example)."""
 from __future__ import annotations
-
 import os
+import re
 from dataclasses import dataclass, field
 
+_INLINE_COMMENT = re.compile(r"\s+#.*$")
 
-def _env(name: str, default: str = "") -> str:
-    return os.environ.get(f"DD_{name}", default)
-
+def _env(name: str, default: str = "", *, secret: bool = False) -> str:
+    v = os.environ.get(f"DD_{name}", default).strip()
+    if v.startswith("#"):          # an "inline comment" that the env parser swallowed as the value
+        return ""
+    if not secret:                 # secrets may legitimately contain " #"
+        v = _INLINE_COMMENT.sub("", v).strip()
+    return v
 
 def _bool(name: str, default: bool = False) -> bool:
     v = _env(name, "1" if default else "0").strip().lower()
@@ -24,12 +29,12 @@ class Settings:
     playlists_subdir: str = field(default_factory=lambda: _env("PLAYLISTS_SUBDIR", "_Playlists"))
 
     lb_user: str = field(default_factory=lambda: _env("LB_USER"))
-    lb_token: str = field(default_factory=lambda: _env("LB_TOKEN"))
+    lb_token: str = field(default_factory=lambda: _env("LB_TOKEN", secret=True))
     lb_url: str = field(default_factory=lambda: _env("LB_URL", "https://api.listenbrainz.org"))
 
     navidrome_url: str = field(default_factory=lambda: _env("NAVIDROME_URL"))
     navidrome_user: str = field(default_factory=lambda: _env("NAVIDROME_USER"))
-    navidrome_pass: str = field(default_factory=lambda: _env("NAVIDROME_PASS"))
+    navidrome_pass: str = field(default_factory=lambda: _env("NAVIDROME_PASS", secret=True))
 
     yubal_url: str = field(default_factory=lambda: _env("YUBAL_URL"))
     yubal_data_dir: str = field(default_factory=lambda: _env("YUBAL_DATA_DIR", ""))
@@ -64,13 +69,15 @@ class Settings:
     port: int = field(default_factory=lambda: int(_env("PORT", "8090")))
     contact: str = field(default_factory=lambda: _env("CONTACT", "dailydig@localhost"))
 
-    admin_password: str = field(default_factory=lambda: _env("ADMIN_PASSWORD"))
-    ingest_token: str = field(default_factory=lambda: _env("INGEST_TOKEN"))
+    admin_password: str = field(default_factory=lambda: _env("ADMIN_PASSWORD", secret=True))
+    ingest_token: str = field(default_factory=lambda: _env("INGEST_TOKEN", secret=True))
 
     workers: int = field(default_factory=lambda: int(_env("WORKERS", "2")))
     expire_days: int = field(default_factory=lambda: int(_env("EXPIRE_DAYS", "0")))   # 0 = keep forever
     auto_download: bool = field(default_factory=lambda: _bool("AUTO_DOWNLOAD", True))
     enable_scheduler: bool = field(default_factory=lambda: _bool("SCHEDULER", True))
+
+    always_review: bool = field(default_factory=lambda: _bool("ALWAYS_REVIEW", False))
 
     @property
     def db_path(self) -> str:
@@ -98,6 +105,10 @@ class Settings:
     @property
     def user_agent(self) -> str:
         return f"dailydig/0.1 ( {self.contact} )"
+
+    @property
+    def cookies_path(self) -> str:
+        return os.path.join(self.config_dir, "cookies.txt")
 
 
 _settings: Settings | None = None

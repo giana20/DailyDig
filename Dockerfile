@@ -6,9 +6,11 @@ ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 DD_CONFIG_DIR=/config DD_MUSIC_DIR=/mu
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg curl openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
+COPY --from=denoland/deno:bin /deno /usr/local/bin/deno
+
 WORKDIR /app
 COPY requirements.txt .
-RUN pip install -r requirements.txt yt-dlp
+RUN pip install -r requirements.txt "yt-dlp[default]"
 
 COPY dailydig ./dailydig
 

@@ -37,6 +37,11 @@ label.f{display:flex;flex-direction:column;gap:4px;color:var(--mu);font-size:12p
 .bar2{height:6px;background:var(--sf2);border-radius:9px;overflow:hidden}.bar2 i{display:block;height:100%;background:var(--ac)}
 #toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--tx);color:var(--bg);padding:9px 14px;border-radius:10px;opacity:0;pointer-events:none;transition:.2s}#toast.on{opacity:1}
 @media(max-width:560px){.trk{grid-template-columns:22px 1fr auto}.trk .pill{display:none}}
+.modal-back{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:20;display:flex;align-items:flex-start;justify-content:center;padding:4vh 12px;overflow:auto}
+.modal{background:var(--sf);border:1px solid var(--bd);border-radius:var(--r);padding:18px;width:min(720px,100%)}
+.cand{border-top:1px solid var(--bd);padding:10px 0;display:flex;gap:10px;align-items:center}
+.cand.cur{background:var(--sf2);border-radius:8px;padding:10px}
+.pill.accept{color:var(--ok)}.pill.verify{color:var(--warn)}.pill.reject{color:var(--bad)}
 </style>
 </head>
 <body>
@@ -76,7 +81,8 @@ async function today(){
     el('div',{},
       el('button',{class:'i',title:'More like this',onclick:()=>fb(t.id,'like')},'👍'),
       el('button',{class:'i',title:'Not for me',onclick:()=>fb(t.id,'dislike')},'👎'),
-      el('button',{class:'i',title:'Block this artist',onclick:()=>fb(t.id,'block_artist')},'🚫')))));
+      el('button',{class:'i',title:'Block this artist',onclick:()=>fb(t.id,'block_artist')},'🚫'),
+      ['review','failed'].includes(t.status)?el('button',{class:'i',title:'Review match',onclick:()=>reviewModal(t.id)},'🔎'):null))));
   root.append(card);return root}
 async function fb(id,action){try{await post('/feedback',{track_id:id,action});toast({like:'Saved. More like this.',dislike:'Got it.',block_artist:'Artist blocked.'}[action]);render()}catch(e){toast(e.message)}}
 
@@ -118,6 +124,19 @@ async function downloader(){
     el('div',{},el('b',{},d.expire_days+' d'),el('span',{},'auto-expire (0 = keep)')),
     el('div',{},el('b',{},d.format+' · '+d.concurrency+'×'),el('span',{},'format · parallel downloads')),
     el('div',{},el('b',{style:'font-size:13px'},d.discovery_dir),el('span',{},'download folder'))));
+  const ck=d.cookies||{},file=el('input',{type:'file',accept:'.txt,text/plain'});
+  root.append(el('div',{class:'card'},
+    el('div',{class:'row'},el('div',{class:'grow'},el('b',{},'Always review matches'),
+      el('div',{class:'why'},'Never auto-accept: every track waits in Review until you pick the video.')),
+      sw(d.always_review,v=>post('/downloader/settings',{always_review:v},'PATCH').then(()=>toast(v?'Always review on':'Always review off'))))));
+  root.append(el('div',{class:'card'},el('b',{},'YouTube cookies'),
+    el('div',{class:'why',style:'margin:6px 0 10px'},(ck.present?
+      ck.cookies+' cookies loaded ('+ck.youtube+' for youtube.com), updated '+ago(ck.updated_at)+'. ':'No cookies file. ')+
+      'Needed when yt-dlp says “sign in / cookies”. Export a Netscape cookies.txt from a private window logged into YouTube Music. Applies to the yt-dlp backend only.'),
+    el('div',{class:'row'},file,
+      el('button',{class:'b p',onclick:async()=>{if(!file.files[0])return toast('Choose a cookies.txt first');
+        try{await post('/cookies',{content:await file.files[0].text()},'PUT');toast('Cookies saved');render()}catch(e){toast(e.message)}}},'Upload'),
+      ck.present?el('button',{class:'b',onclick:()=>api('/cookies',{method:'DELETE'}).then(()=>{toast('Cookies removed');render()})},'Remove'):null)));
   const c=el('div',{class:'card'},el('b',{},'Review & failed'));
   if(!d.review.length)c.append(el('div',{class:'empty'},'Nothing needs attention.'));
   d.review.forEach(r=>c.append(el('div',{class:'trk',style:'grid-template-columns:1fr auto'},el('div',{},el('div',{class:'t'},r.artist+' — '+r.title),el('div',{class:'why'},r.error||'')),
@@ -153,6 +172,50 @@ async function system(){
   const jt=el('table',{},el('tr',{},el('th',{},'#'),el('th',{},'Job'),el('th',{},'State'),el('th',{},'Try'),el('th',{},'Updated'),el('th',{},'Error')));
   s.recent_jobs.forEach(j=>jt.append(el('tr',{},el('td',{},j.id),el('td',{},j.kind),el('td',{},pill(j.state==='done'?'ok':j.state==='running'?'pending':j.state)),el('td',{},j.attempts),el('td',{},ago(j.updated_at)),el('td',{class:'why'},j.error||''))));
   root.append(el('div',{class:'card'},el('b',{},'Recent jobs'),jt));return root}
+
+const fmt=s=>s?Math.floor(s/60)+':'+String(Math.round(s%60)).padStart(2,'0'):'?';
+const ytId=s=>{s=(s||'').trim();const m=s.match(/(?:v=|youtu\.be\/)([\w-]{11})/)||s.match(/^([\w-]{11})$/);return m&&m[1]};
+
+async function reviewModal(id){
+  const back=el('div',{class:'modal-back',onclick:e=>{if(e.target===back)back.remove()}});
+  const box=el('div',{class:'modal'});back.append(box);document.body.append(back);
+  const close=()=>back.remove();
+  const choose=async vid=>{try{await post('/tracks/'+id+'/approve?video_id='+encodeURIComponent(vid));toast('Approved, downloading');close();render()}catch(e){toast(e.message)}};
+  async function load(q){
+    box.replaceChildren(el('div',{class:'why'},'Searching YouTube Music…'));
+    let d;
+    try{d=await api('/tracks/'+id+'/candidates'+(q?'?q='+encodeURIComponent(q):''))}
+    catch(e){box.replaceChildren(el('b',{},'Search failed'),el('div',{class:'why'},e.message),el('button',{class:'b',onclick:close},'Close'));return}
+    const w=d.wanted;
+    const qi=el('input',{value:d.query,style:'flex:1;min-width:200px'});
+    const man=el('input',{placeholder:'Paste a YouTube / YT Music URL or video id',style:'flex:1;min-width:200px'});
+    box.replaceChildren(
+      el('div',{class:'row'},el('h2',{class:'grow',style:'margin:0'},'Review match'),el('button',{class:'b',onclick:close},'✕')),
+      el('div',{class:'card kv',style:'margin-top:12px'},
+        el('div',{},el('b',{style:'font-size:14px'},w.title),el('span',{},'wanted title')),
+        el('div',{},el('b',{style:'font-size:14px'},w.artist),el('span',{},'wanted artist')),
+        el('div',{},el('b',{style:'font-size:14px'},fmt(w.duration_s)),el('span',{},'expected duration')),
+        el('div',{},el('b',{style:'font-size:14px'},w.status),el('span',{},w.recording_mbid?'MBID '+w.recording_mbid.slice(0,8)+'…':'no MBID'))),
+      w.error?el('div',{class:'why',style:'color:var(--warn)'},w.error):null,
+      el('div',{class:'row',style:'margin:12px 0'},qi,el('button',{class:'b',onclick:()=>load(qi.value)},'Search again')),
+      d.candidates.length?null:el('div',{class:'empty'},'No results for this query.'),
+      ...d.candidates.map(c=>el('div',{class:'cand'+(c.current?' cur':'')},
+        el('div',{class:'grow'},
+          el('div',{class:'t',style:'white-space:normal'},c.title,c.current?' (current pick)':''),
+          el('div',{class:'a'},c.artists.join(', ')+(c.album?' · '+c.album:'')+' · '+fmt(c.duration_s)+
+            (w.duration_s&&c.duration_s?' (Δ'+Math.round(c.duration_s-w.duration_s)+'s)':'')),
+          el('div',{class:'why'},'score '+c.score+' · '+c.reasons.join('; '))),
+        el('span',{class:'pill '+c.level},c.level),
+        el('a',{href:c.url,target:'_blank',rel:'noopener',class:'why'},'open'),
+        el('button',{class:'b p',onclick:()=>choose(c.video_id)},'Use this'))),
+      el('div',{class:'row',style:'margin-top:14px'},man,
+        el('button',{class:'b',onclick:()=>{const v=ytId(man.value);v?choose(v):toast('Not a valid video id or URL')}},'Use this link')),
+      el('div',{class:'row',style:'margin-top:14px'},
+        el('button',{class:'b',onclick:()=>post('/tracks/'+id+'/retry').then(()=>{toast('Retrying auto-match');close();render()}).catch(e=>toast(e.message))},'Retry auto-match'),
+        el('button',{class:'b',onclick:()=>post('/feedback',{track_id:id,action:'dislike'}).then(()=>{toast('Dropped');close();render()})},'Drop track')));
+  }
+  load();
+}
 
 nav();render();
 try{const es=new EventSource('/api/events');es.onmessage=e=>{const d=JSON.parse(e.data);const j=d.jobs||{};$('#chips').textContent=(j.running?j.running+' running · ':'')+(j.queued?j.queued+' queued':'idle');if(['today','downloader'].includes(cur)&&!es._busy){clearTimeout(es._t);es._t=setTimeout(render,600)}}}catch{}

@@ -9,7 +9,7 @@ import os
 from ..models import norm
 from . import files
 from .backends import DLRequest, DownloadError, RetryLater, get_backend  # noqa: F401  (RetryLater re-exported)
-from .matcher import pick_best
+from .matcher import pick_best, verify
 
 log = logging.getLogger("dailydig.download")
 
@@ -79,9 +79,10 @@ async def _download(ctx, row) -> dict:
         if verdict.level == "reject":
             _set(ctx, rid, status="failed", error="no confident match: " + "; ".join(verdict.reasons)[:300])
             return {"status": "failed", "reasons": verdict.reasons}
-        if verdict.level != "accept":
+        if verdict.level != "accept" or always_review(ctx):
+            why = "; ".join(verdict.reasons)[:300]
             _set(ctx, rid, status="review", video_id=verdict.video_id,
-                 error=f"{verdict.level}: " + "; ".join(verdict.reasons)[:300])
+                 error=f"{verdict.level}: {why}" + (" (manual review on)" if verdict.level == "accept" else ""))
             return {"status": "review", "reasons": verdict.reasons}
         vid = verdict.video_id
         _set(ctx, rid, video_id=vid)
@@ -116,3 +117,32 @@ def approve(ctx, row_id: int, video_id: str | None = None) -> bool:
     _set(ctx, row_id, status="approved", video_id=vid, error=None)
     ctx.queue.enqueue("download_track", {"id": row_id}, dedupe_key=f"dl:{row_id}", max_attempts=2)
     return True
+
+def always_review(ctx) -> bool:
+    v = ctx.db.kv_get("always_review")
+    return ctx.settings.always_review if v is None else bool(v)
+
+
+async def review_info(ctx, row_id: int, query: str | None = None) -> dict | None:
+    """What we were looking for + every YTM candidate with its matcher verdict, for the review popup."""
+    row = ctx.db.one("SELECT * FROM playlist_tracks WHERE id=?", (row_id,))
+    if not row:
+        return None
+    expected_s = row["duration_ms"] / 1000 if row["duration_ms"] else None
+    q = (query or "").strip() or f"{row['artist']} {row['title']}"
+
+    async def search():
+        return await ctx.ytm.search_songs(q, limit=10)
+    results = await ctx.cache.get_or_fetch(f"ytm:search10:{norm(q)}", search, 3600) or []
+    rank = {"accept": 3, "verify": 2, "review": 1, "reject": 0}
+    cands = []
+    for c in results:
+        v = verify(row["title"], row["artist"], expected_s, cand_title=c["title"], cand_artists=c["artists"],
+                   cand_duration_s=c.get("duration_s"), video_id=c["video_id"])
+        cands.append({**c, "level": v.level, "score": v.score, "reasons": v.reasons,
+                      "url": ctx.ytm.watch_url(c["video_id"]), "current": c["video_id"] == row["video_id"]})
+    cands.sort(key=lambda c: (rank[c["level"]], c["score"]), reverse=True)
+    return {"query": q, "candidates": cands,
+            "wanted": {"id": row["id"], "title": row["title"], "artist": row["artist"], "duration_s": expected_s,
+                       "recording_mbid": row["recording_mbid"], "status": row["status"], "error": row["error"],
+                       "video_id": row["video_id"], "reason": row["reason"]}}

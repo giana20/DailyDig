@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import secrets
+import re
 from contextlib import asynccontextmanager
 
 from croniter import croniter
@@ -296,8 +297,8 @@ async def downloader(request: Request):
             "navidrome": {"configured": ctx.navidrome.configured,
                           "ok": await ctx.navidrome.ping() if ctx.navidrome.configured else None},
             "discovery_dir": s.discovery_dir, "playlists_dir": s.playlists_dir,
-            "expire_days": s.expire_days, "review": [dict(r) for r in review]}
-
+            "expire_days": s.expire_days, "review": [dict(r) for r in review],
+            "always_review": pipeline.always_review(ctx), "cookies": cookie_status(ctx)}
 
 @app.get("/api/taste")
 async def taste_view(request: Request):
@@ -370,3 +371,78 @@ async def submit_listens(request: Request):
         except Exception as e:  # noqa: BLE001
             log.warning("fan-out to ListenBrainz failed: %s", e)
     return {"status": "ok", "stored": stored}
+
+
+# ---- YouTube cookies (for yt-dlp) ---------------------------------------------------------------
+def cookie_status(ctx: Context) -> dict:
+    p = ctx.settings.cookies_path
+    if not os.path.exists(p):
+        return {"present": False}
+    n = yt = 0
+    with open(p, encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            if len(line.rstrip("\n").split("\t")) == 7:
+                n += 1
+                yt += "youtube.com" in line
+    return {"present": True, "cookies": n, "youtube": yt, "updated_at": os.path.getmtime(p)}
+
+
+class CookiesBody(BaseModel):
+    content: str
+
+
+@app.get("/api/cookies")
+async def get_cookies(request: Request):
+    return cookie_status(C(request))
+
+
+@app.put("/api/cookies")
+async def put_cookies(body: CookiesBody, request: Request):
+    ctx = C(request)
+    text = body.content.replace("\r\n", "\n").replace("\r", "\n")
+    if len(text) > 2_000_000:
+        raise HTTPException(413, "file too large")
+    rows = [l for l in text.split("\n") if len(l.split("\t")) == 7]
+    if not any("youtube.com" in l for l in rows):
+        raise HTTPException(422, "not a Netscape cookies.txt with youtube.com cookies "
+                                 "(expected 7 tab-separated columns per line)")
+    first = text.lstrip().split("\n", 1)[0]
+    if not re.match(r"#\s*(Netscape )?HTTP Cookie File", first):
+        text = "# Netscape HTTP Cookie File\n" + text
+    p = ctx.settings.cookies_path
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    fd = os.open(p + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    os.replace(p + ".tmp", p)
+    return cookie_status(ctx)
+
+
+@app.delete("/api/cookies")
+async def delete_cookies(request: Request):
+    p = C(request).settings.cookies_path
+    if os.path.exists(p):
+        os.remove(p)
+    return {"present": False}
+
+@app.get("/api/tracks/{tid}/candidates")
+async def track_candidates(tid: int, request: Request, q: str | None = None):
+    try:
+        info = await pipeline.review_info(C(request), tid, q)
+    except Exception as e:  # noqa: BLE001 - YTM is unofficial; surface the reason to the popup
+        raise HTTPException(502, f"search failed: {e}")
+    if not info:
+        raise HTTPException(404, "track not found")
+    return info
+
+
+class DownloaderPatch(BaseModel):
+    always_review: bool | None = None
+
+
+@app.patch("/api/downloader/settings")
+async def patch_downloader(body: DownloaderPatch, request: Request):
+    ctx = C(request)
+    if body.always_review is not None:
+        ctx.db.kv_set("always_review", body.always_review)
+    return {"always_review": pipeline.always_review(ctx)}

@@ -199,19 +199,35 @@ class YtDlp(Backend):
         if not exe:
             raise DownloadError("yt-dlp is not installed in this container")
         os.makedirs(workdir, exist_ok=True)
-        cmd = [exe, "-x", "--audio-format", s.audio_format, "--audio-quality", str(s.audio_quality),
-               "--no-playlist", "--no-progress", "--no-warnings", "-o", os.path.join(workdir, "%(id)s.%(ext)s"),
-               "--print", "after_move:filepath", url]
-        proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        try:
-            out, err = await asyncio.wait_for(proc.communicate(), timeout=s.dl_timeout)
-        except asyncio.TimeoutError:
-            proc.kill()
-            raise DownloadError(f"yt-dlp timed out after {s.dl_timeout}s") from None
-        lines = [l.strip() for l in out.decode("utf-8", "replace").splitlines() if l.strip()]
-        if proc.returncode != 0 or not lines or not os.path.exists(lines[-1]):
-            raise DownloadError("yt-dlp failed: " + err.decode("utf-8", "replace").strip()[-300:])
-        return lines[-1]
+        have_cookies = os.path.exists(s.cookies_path)
+        msg = ""
+        for use_cookies in ((False, True) if have_cookies else (False,)):
+            cmd = [exe, "-f", "bestaudio/best", "-x", "--audio-format", s.audio_format,
+                   "--audio-quality", str(s.audio_quality), "--no-playlist", "--no-progress", "--no-warnings",
+                   "-o", os.path.join(workdir, "%(id)s.%(ext)s"), "--print", "after_move:filepath"]
+            if use_cookies:
+                local = os.path.join(workdir, "cookies.txt")   # private copy: yt-dlp rewrites it
+                shutil.copyfile(s.cookies_path, local)
+                cmd += ["--cookies", local]
+            cmd.append(url)
+            proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE,
+                                                        stderr=asyncio.subprocess.PIPE)
+            try:
+                out, err = await asyncio.wait_for(proc.communicate(), timeout=s.dl_timeout)
+            except asyncio.TimeoutError:
+                proc.kill()
+                raise DownloadError(f"yt-dlp timed out after {s.dl_timeout}s") from None
+            lines = [l.strip() for l in out.decode("utf-8", "replace").splitlines() if l.strip()]
+            if proc.returncode == 0 and lines and os.path.exists(lines[-1]):
+                return lines[-1]
+            msg = err.decode("utf-8", "replace").strip()
+            if not re.search(r"age|sign in|not a bot|cookies|confirm your", msg, re.I):
+                break                       # not an auth problem: retrying with cookies won't help
+        hint = ""
+        if re.search(r"age|sign in|not a bot|cookies|confirm your", msg, re.I):
+            hint = (" [cookies rejected: re-export from a private window (youtube.com) and re-upload]"
+                    if have_cookies else " [upload YouTube cookies in Downloader → YouTube cookies]")
+        raise DownloadError("yt-dlp failed: " + msg[-300:] + hint)
 
     async def _download(self, req: DLRequest) -> str:
         s = self.ctx.settings
