@@ -1,28 +1,18 @@
-"""Download backends. A backend turns a verified YouTube Music video into an audio file on disk.
-
-  yubal_cli  runs your yubal CLI command template (e.g. over ssh + `pct exec`) and parses its output
-  yubal_api  talks to yubal's web API (endpoint discovered from its OpenAPI spec)
-  ytdlp      native yt-dlp with a configurable folder layout, lyrics, ReplayGain, format choice
-
-All of them return the final file path as seen from THIS container.
-"""
+"""Download backend: yt-dlp only. Turns a verified YouTube Music video into a tagged audio file
+inside the library (configurable layout, synced lyrics, ReplayGain, format choice)."""
 from __future__ import annotations
 
 import asyncio
 import logging
 import os
 import re
-import shlex
 import shutil
-import time
 from dataclasses import dataclass
 
 from ..providers.base import ProviderError
-from . import files, layout, tagging
-from .yubal import QueueFull, Yubal
+from . import files, layout, tagging  # noqa: F401  (files imported for patching in tests)
 
 log = logging.getLogger("dailydig.download")
-ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
 
 class DownloadError(ProviderError):
@@ -49,28 +39,8 @@ class DLRequest:
     artist_mbid: str | None = None
 
 
-def map_path(settings, p: str) -> str:
-    """Translate a path printed by yubal (inside its container) into this container's view."""
-    src, _, dst = (settings.yubal_path_map or "").partition("=")
-    if src and dst and (p == src or p.startswith(src.rstrip("/") + "/")):
-        return dst.rstrip("/") + p[len(src.rstrip("/")):]
-    return p
-
-
-def parse_yubal_stdout(stdout: str) -> list[dict]:
-    """Same extraction your n8n node does: 'OK → <path>' lines (paths may wrap across lines) and the
-    Title/Artist metadata table rows."""
-    text = ANSI.sub("", stdout)
-    paths = [re.sub(r"[\r\n]+", "", m.group(1)).strip()
-             for m in re.finditer(r"OK\s*→\s*([\s\S]*?)(?=\s*\n\s*Downloading|\Z)", text)]
-    titles = [m.group(1).strip() for m in re.finditer(r"│\s*Title\s*│\s*(.*?)\s*│", text)]
-    artists = [m.group(1).strip() for m in re.finditer(r"│\s*Artist\s*│\s*(.*?)\s*│", text)]
-    return [{"path": p, "title": titles[i] if i < len(titles) else None,
-             "artist": artists[i] if i < len(artists) else None} for i, p in enumerate(paths) if p]
-
-
-class Backend:
-    name = "base"
+class YtDlp:
+    name = "ytdlp"
 
     def __init__(self, ctx):
         self.ctx = ctx
@@ -78,90 +48,11 @@ class Backend:
         self.sem = sems.setdefault(self.name, asyncio.Semaphore(max(1, ctx.settings.dl_concurrency)))
 
     async def health(self) -> dict:
-        return {"ok": True}
+        return {"ok": bool(shutil.which("yt-dlp")), "detail": shutil.which("yt-dlp") or "yt-dlp not installed"}
 
     async def download(self, req: DLRequest) -> str:
         async with self.sem:
             return await self._download(req)
-
-    async def _download(self, req: DLRequest) -> str:  # pragma: no cover
-        raise NotImplementedError
-
-
-# --------------------------------------------------------------------------------------------------
-class YubalCLI(Backend):
-    name = "yubal_cli"
-
-    async def health(self) -> dict:
-        cmd = self.ctx.settings.yubal_cmd
-        return {"ok": bool(cmd), "detail": cmd or "DD_YUBAL_CMD not set"}
-
-    def argv(self, url: str, dest: str) -> list[str]:
-        parts = shlex.split(self.ctx.settings.yubal_cmd)
-        if not parts:
-            raise DownloadError("DD_YUBAL_CMD is empty")
-        return [p.replace("{url}", url).replace("{dest}", dest) for p in parts]
-
-    async def _download(self, req: DLRequest) -> str:
-        s = self.ctx.settings
-        started = time.time()
-        argv = self.argv(req.url, s.yubal_dest)
-        try:
-            proc = await asyncio.create_subprocess_exec(*argv, stdout=asyncio.subprocess.PIPE,
-                                                        stderr=asyncio.subprocess.STDOUT)
-        except FileNotFoundError as e:
-            raise DownloadError(f"cannot run {argv[0]!r}: {e}. Is it installed in this container "
-                                f"(ssh needs openssh-client and a mounted key)?") from e
-        try:
-            out, _ = await asyncio.wait_for(proc.communicate(), timeout=s.dl_timeout)
-        except asyncio.TimeoutError:
-            proc.kill()
-            raise DownloadError(f"yubal command timed out after {s.dl_timeout}s") from None
-        text = ANSI.sub("", out.decode("utf-8", "replace"))
-        if proc.returncode != 0:
-            raise DownloadError(f"yubal exited {proc.returncode}: {text.strip()[-300:]}")
-        for item in parse_yubal_stdout(text):
-            p = map_path(s, item["path"])
-            if os.path.exists(p):
-                return p
-        # output format changed or path map is off: fall back to "newest audio file under the destination"
-        dest_local = map_path(s, s.yubal_dest)
-        found = await asyncio.to_thread(files.locate_new_file, dest_local, started, req.title, req.artist)
-        if found:
-            return found
-        raise DownloadError("yubal finished but its output file was not found. Check DD_YUBAL_PATH_MAP "
-                            f"(now {s.yubal_path_map!r}). Output tail: {text.strip()[-200:]}")
-
-
-# --------------------------------------------------------------------------------------------------
-class YubalAPI(Backend):
-    name = "yubal_api"
-
-    async def health(self) -> dict:
-        return await Yubal(self.ctx).health()
-
-    async def _download(self, req: DLRequest) -> str:
-        s, yb, started = self.ctx.settings, Yubal(self.ctx), time.time()
-        if not (await yb.health()).get("ok"):
-            raise DownloadError(f"yubal at {s.yubal_url} is not reachable")
-        try:
-            job_id = await yb.create_job(req.url, max_items=1)
-        except QueueFull as e:
-            raise RetryLater(45, str(e)) from e
-        await yb.wait(job_id, timeout=s.dl_timeout)
-        root = map_path(s, s.yubal_data_dir or s.yubal_dest)
-        found = await asyncio.to_thread(files.locate_new_file, root, started, req.title, req.artist)
-        if not found:
-            raise DownloadError("yubal job finished but no new audio file was found (check DD_YUBAL_DATA_DIR)")
-        return found
-
-
-# --------------------------------------------------------------------------------------------------
-class YtDlp(Backend):
-    name = "ytdlp"
-
-    async def health(self) -> dict:
-        return {"ok": bool(shutil.which("yt-dlp")), "detail": shutil.which("yt-dlp") or "yt-dlp not installed"}
 
     async def _metadata(self, req: DLRequest) -> dict:
         meta = {"title": req.title, "artist": req.artist, "album_artist": req.artist, "album": req.album,
@@ -258,19 +149,9 @@ class YtDlp(Backend):
         return target
 
 
-BACKENDS = {"yubal_cli": YubalCLI, "yubal_api": YubalAPI, "ytdlp": YtDlp}
-
-
 def choose(settings) -> str:
-    d = settings.downloader
-    if d in BACKENDS:
-        return d
-    if settings.yubal_cmd:
-        return "yubal_cli"
-    if settings.yubal_url:
-        return "yubal_api"
     return "ytdlp"
 
 
-def get_backend(ctx) -> Backend:
-    return BACKENDS[choose(ctx.settings)](ctx)
+def get_backend(ctx) -> YtDlp:
+    return YtDlp(ctx)

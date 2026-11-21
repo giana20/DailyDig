@@ -36,28 +36,13 @@ class Settings:
     navidrome_user: str = field(default_factory=lambda: _env("NAVIDROME_USER"))
     navidrome_pass: str = field(default_factory=lambda: _env("NAVIDROME_PASS", secret=True))
 
-    yubal_url: str = field(default_factory=lambda: _env("YUBAL_URL"))
-    yubal_data_dir: str = field(default_factory=lambda: _env("YUBAL_DATA_DIR", ""))
-
-    # --- downloader -------------------------------------------------------------------------
-    # auto | yubal_cli | yubal_api | ytdlp.  auto = yubal_cli if DD_YUBAL_CMD is set, else yubal_api
-    # if DD_YUBAL_URL is set, else ytdlp.
-    downloader: str = field(default_factory=lambda: _env("DOWNLOADER", "auto").lower())
-    # Command template, run without a shell. {url} and {dest} are substituted. Example (Proxmox LXC over ssh):
-    #   ssh -o BatchMode=yes root@192.168.68.5 pct exec 100 -- /usr/local/bin/yubal download {url} {dest}
-    yubal_cmd: str = field(default_factory=lambda: _env("YUBAL_CMD"))
-    # Destination folder AS yubal sees it (inside its container). Default: <yubal data>/_discovery.
-    yubal_dest: str = field(default_factory=lambda: _env("YUBAL_DEST", "/app/data"))
-    # "yubal_prefix=local_prefix" translating paths printed by yubal into paths in this container.
-    yubal_path_map: str = field(default_factory=lambda: _env("YUBAL_PATH_MAP", "/app/data=/music"))
+    # --- downloader (yt-dlp) ----------------------------------------------------------------
     dl_concurrency: int = field(default_factory=lambda: int(_env("DL_CONCURRENCY", "3")))
     dl_timeout: int = field(default_factory=lambda: int(_env("DL_TIMEOUT", "600")))
-
-    # --- native yt-dlp backend (same options yubal has) ------------------------------------------
     audio_format: str = field(default_factory=lambda: _env("AUDIO_FORMAT", "opus").lower())   # opus|mp3|m4a
     audio_quality: int = field(default_factory=lambda: int(_env("AUDIO_QUALITY", "0")))       # 0 best .. 10
     # Path under the discovery folder. Tokens: {artist} {album_artist} {album} {year} {track} {title} {ext}
-    # {track:02d}-style format specs work. Default = yubal's own layout.
+    # {track:02d}-style format specs work.
     path_template: str = field(default_factory=lambda: _env(
         "PATH_TEMPLATE", "{album_artist}/{year} - {album}/{track:02d} - {title}.{ext}"))
     fetch_lyrics: bool = field(default_factory=lambda: _bool("FETCH_LYRICS", True))
@@ -96,11 +81,6 @@ class Settings:
     @property
     def playlists_dir(self) -> str:
         return os.path.join(self.music_dir, self.playlists_subdir)
-
-    @property
-    def yubal_library(self) -> str:
-        """Where yubal writes files, as seen from this container."""
-        return self.yubal_data_dir or self.discovery_dir
 
     @property
     def user_agent(self) -> str:

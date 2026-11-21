@@ -103,7 +103,7 @@ async def status(request: Request):
         "providers": [p.health() for p in ctx.providers.values()],
         "jobs": ctx.queue.counts(), "ranker": ctx.db.kv_get("ranker_stats"),
         "configured": {"listenbrainz_user": bool(s.lb_user), "lb_token": bool(s.lb_token),
-                       "navidrome": ctx.navidrome.configured, "yubal": bool(s.yubal_url)},
+                       "navidrome": ctx.navidrome.configured},
     }
 
 
@@ -291,7 +291,7 @@ async def downloader(request: Request):
     be = get_backend(ctx)
     review = ctx.db.query("SELECT id,title,artist,status,error,video_id FROM playlist_tracks "
                           "WHERE status IN ('review','failed') ORDER BY id DESC LIMIT 100")
-    return {"backend": choose(s), "backend_health": await be.health(), "yubal_url": s.yubal_url,
+    return {"backend": choose(s), "backend_health": await be.health(),
             "format": s.audio_format, "path_template": s.path_template, "concurrency": s.dl_concurrency,
             "lyrics": s.fetch_lyrics, "replaygain": s.replaygain,
             "navidrome": {"configured": ctx.navidrome.configured,

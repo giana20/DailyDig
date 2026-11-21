@@ -1,6 +1,5 @@
 import os
 import subprocess
-import sys
 import time
 
 import httpx
@@ -24,9 +23,9 @@ def test_matcher_rules():
     far = verify("Souvlaki Space Dust", "Slowdive", 340, cand_title="Souvlaki Space Dust", cand_duration_s=400, **V)
     assert far.level == "reject" and "different recording" in far.reasons[0]
     near = verify("Souvlaki Space Dust", "Slowdive", 340, cand_title="Souvlaki Space Dust", cand_duration_s=349, **V)
-    assert near.level == "accept"            # exact match gets the +-10 s window
+    assert near.level == "accept"
     partial = verify("Space Dust", "Slowdive", 340, cand_title="Space Dust Remastered Edition", cand_duration_s=345, **V)
-    assert partial.level == "verify"          # partial title match only gets +-2.5 s
+    assert partial.level == "verify"
     assert verify("Halo", "Beyonce", 200, cand_title="Halo", cand_artists=["Someone Else"],
                   cand_duration_s=200, video_id="x").level == "reject"
     assert verify("Halo", "Beyonce", None, cand_title="Halo", cand_artists=["Beyonce"], cand_duration_s=None,
@@ -38,10 +37,10 @@ def test_matcher_rules():
 
 
 def test_bitrate_floor():
-    assert not passes_bitrate_floor(100_000, 300, lossless=False)       # ~2.7 kbit/s: digital silence
-    assert passes_bitrate_floor(5_000_000, 300, lossless=False)         # ~133 kbit/s
-    assert passes_bitrate_floor(1_000_000, 300, lossless=False)         # ~27 kbit/s: above the 12 kbit/s lossy floor
-    assert not passes_bitrate_floor(1_000_000, 300, lossless=True)      # ~27 kbit/s: below the 48 kbit/s lossless floor
+    assert not passes_bitrate_floor(100_000, 300, lossless=False)
+    assert passes_bitrate_floor(5_000_000, 300, lossless=False)
+    assert passes_bitrate_floor(1_000_000, 300, lossless=False)
+    assert not passes_bitrate_floor(1_000_000, 300, lossless=True)
 
 
 def make_audio(path, seconds=200, codec="libopus"):
@@ -50,39 +49,20 @@ def make_audio(path, seconds=200, codec="libopus"):
                     "-c:a", codec, "-b:a", "96k", path], check=True)
 
 
-FAKE_YUBAL = r'''#!/usr/bin/env python3
-import subprocess, sys, os
-url, dest = sys.argv[1], sys.argv[2]
-p = os.path.join(dest, "Slowdive", "1993 - Souvlaki", "04 - Souvlaki Space Dust.opus")
-os.makedirs(os.path.dirname(p), exist_ok=True)
-subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "anoisesrc=d=200:c=pink", "-c:a", "libopus", "-b:a", "96k", p], check=True)
-half = len(p) // 2   # rich wraps long paths across lines
-print("\x1b[32m+\x1b[0m Downloading", url)
-print("\u2502 Title  \u2502 Souvlaki Space Dust \u2502")
-print("\u2502 Artist \u2502 Slowdive            \u2502")
-print("OK \u2192", p[:half])
-print(p[half:])
-print()
-'''
-
-
 @pytest.fixture
-def fake_yubal(ctx, settings, tmp_path):
-    script = tmp_path / "fake_yubal.py"
-    script.write_text(FAKE_YUBAL)
-    settings.downloader = "yubal_cli"
-    settings.yubal_cmd = f"{sys.executable} {script} {{url}} {{dest}}"
-    settings.yubal_dest = os.path.join(settings.music_dir, "_discovery")
-    settings.yubal_path_map = ""
-    state = {"posts": 0}
-    orig = backends.YubalCLI._download
+def fake_dl(ctx, settings, monkeypatch):
+    """Stub the yt-dlp subprocess: writes a 200 s noise file and counts calls."""
+    settings.fetch_lyrics = settings.replaygain = False
+    state = {"runs": 0}
 
-    async def counting(self, req):
-        state["posts"] += 1
-        return await orig(self, req)
-    backends.YubalCLI._download = counting
-    yield state
-    backends.YubalCLI._download = orig
+    async def fake_run(self, url, workdir):
+        state["runs"] += 1
+        os.makedirs(workdir, exist_ok=True)
+        out = os.path.join(workdir, "vid.opus")
+        make_audio(out, 200)
+        return out
+    monkeypatch.setattr(backends.YtDlp, "run_ytdlp", fake_run)
+    return state
 
 
 async def seed_row(ctx, **over):
@@ -98,39 +78,40 @@ async def seed_row(ctx, **over):
     return pid, rid
 
 
-async def test_download_validate_tag_deliver(ctx, settings, fake_yubal):
+async def test_download_validate_tag_deliver(ctx, settings, fake_dl):
     async def search(q, limit=5):
         return [{"video_id": "live1", "title": "Souvlaki Space Dust (Live)", "artists": ["Slowdive"], "duration_s": 201},
                 {"video_id": "vid1", "title": "Souvlaki Space Dust", "artists": ["Slowdive"], "duration_s": 200}]
     ctx.ytm.search_songs = search
     pid, rid = await seed_row(ctx)
     res = await pipeline.download_track(ctx, rid)
-    assert res["status"] == "downloaded" and fake_yubal["posts"] == 1
+    assert res["status"] == "downloaded" and fake_dl["runs"] == 1
     row = ctx.db.one("SELECT * FROM playlist_tracks WHERE id=?", (rid,))
     assert row["video_id"] == "vid1" and row["file_path"].endswith(".opus")
+    assert row["file_path"].startswith(settings.discovery_dir)
     import mutagen
     tags = mutagen.File(row["file_path"]).tags
     assert tags["musicbrainz_trackid"] == ["0e1f5d2b-1c3e-4c0a-9d6e-111111111111"]
     out = await deliver.deliver_playlist(ctx, pid)
     assert out["tracks"] == 1 and out["m3u8"]
     body = open(out["m3u8"], encoding="utf-8").read()
-    assert "#EXTM3U" in body and "../_discovery/Slowdive/1993 - Souvlaki/04 - Souvlaki Space Dust.opus" in body
+    assert "#EXTM3U" in body and "../_discovery/Slowdive/" in body and ".opus" in body
     assert ctx.db.one("SELECT status FROM playlist_tracks WHERE id=?", (rid,))["status"] == "delivered"
 
 
-async def test_ambiguous_goes_to_review_then_manual_approve(ctx, settings, fake_yubal):
+async def test_ambiguous_goes_to_review_then_manual_approve(ctx, settings, fake_dl):
     async def search(q, limit=5):
         return [{"video_id": "v9", "title": "Souvlaki Space Dust", "artists": ["Slowdive"], "duration_s": 213}]
     ctx.ytm.search_songs = search
     _, rid = await seed_row(ctx)
     res = await pipeline.download_track(ctx, rid)
-    assert res["status"] == "review" and fake_yubal["posts"] == 0
-    assert pipeline.approve(ctx, rid)                      # manual choice overrides the matcher
+    assert res["status"] == "review" and fake_dl["runs"] == 0
+    assert pipeline.approve(ctx, rid)
     res = await pipeline.download_track(ctx, rid)
     assert res["status"] == "downloaded"
 
 
-async def test_fake_silence_rejected(ctx, settings, fake_yubal, monkeypatch):
+async def test_fake_silence_rejected(ctx, settings, fake_dl, monkeypatch):
     async def search(q, limit=5):
         return [{"video_id": "v1", "title": "Souvlaki Space Dust", "artists": ["Slowdive"], "duration_s": 200}]
     ctx.ytm.search_songs = search
@@ -138,10 +119,10 @@ async def test_fake_silence_rejected(ctx, settings, fake_yubal, monkeypatch):
     _, rid = await seed_row(ctx)
     res = await pipeline.download_track(ctx, rid)
     assert res["status"] == "failed"
-    assert not any(f.endswith(".opus") for _, _, fs in os.walk(settings.yubal_data_dir) for f in fs)
+    assert not any(f.endswith(".opus") for _, _, fs in os.walk(settings.discovery_dir) for f in fs)
 
 
-async def test_promote_and_expire(ctx, settings, fake_yubal):
+async def test_promote_and_expire(ctx, settings, fake_dl):
     async def search(q, limit=5):
         return [{"video_id": "v1", "title": "Souvlaki Space Dust", "artists": ["Slowdive"], "duration_s": 200}]
     ctx.ytm.search_songs = search
@@ -150,7 +131,6 @@ async def test_promote_and_expire(ctx, settings, fake_yubal):
     new = cleanup.promote(ctx, rid)
     assert new and os.path.exists(new) and "_discovery" not in new
     assert ctx.db.one("SELECT status FROM playlist_tracks WHERE id=?", (rid,))["status"] == "promoted"
-    # expiry: a retired, old row's file inside _discovery is deleted; unrelated file kept
     p2 = os.path.join(settings.discovery_dir, "X", "Y", "z.opus")
     make_audio(p2, 5)
     ctx.db.insert("INSERT INTO playlist_tracks(playlist_id,track_key,title,artist,status,file_path,added_at) "
@@ -181,26 +161,9 @@ async def test_navidrome_sync(ctx, settings):
     assert await nd.find_song("Nobody", "Unrelated Thing") is None
     assert await nd.sync_playlist("Daily Dig", ["s1"]) == "p1"
     create = [c for c in calls if c[0] == "createPlaylist"][0][1]
-    assert create["playlistId"] == "p1" and "name" not in create        # replaces, doesn't duplicate
-    assert {"t", "s", "u", "v", "c"} <= set(create)                      # token auth, never the raw password
+    assert create["playlistId"] == "p1" and "name" not in create
+    assert {"t", "s", "u", "v", "c"} <= set(create)
     assert "p" not in create
-
-
-# ---------------------------------------------------------------- new: parsing, layout, backends ------------
-def test_parse_yubal_stdout_like_the_n8n_node():
-    out = ("\x1b[1mDownloading\x1b[0m x\n│ Title  │ Alison │\n│ Artist │ Slowdive │\n"
-           "OK → /app/data/Slowdive/1991 - Just for a Day/05 - Alis\non.opus\n\nDownloading y\n"
-           "│ Title  │ Halo │\n│ Artist │ Beyoncé │\nOK → /app/data/Beyoncé/2008 - I Am/03 - Halo.opus\n")
-    items = backends.parse_yubal_stdout(out)
-    assert [i["path"] for i in items] == ["/app/data/Slowdive/1991 - Just for a Day/05 - Alison.opus",
-                                          "/app/data/Beyoncé/2008 - I Am/03 - Halo.opus"]
-    assert items[0]["title"] == "Alison" and items[1]["artist"] == "Beyoncé"
-
-
-def test_path_map(settings):
-    settings.yubal_path_map = "/app/data=/music"
-    assert backends.map_path(settings, "/app/data/A/b.opus") == "/music/A/b.opus"
-    assert backends.map_path(settings, "/app/database/x") == "/app/database/x"      # prefix must be a whole segment
 
 
 def test_layout_is_configurable_and_safe(tmp_path):
@@ -215,7 +178,7 @@ def test_layout_is_configurable_and_safe(tmp_path):
 
 
 async def test_ytdlp_backend_layout_lyrics_replaygain(ctx, settings, monkeypatch):
-    settings.downloader, settings.audio_format = "ytdlp", "opus"
+    settings.audio_format = "opus"
     settings.path_template = "{album_artist}/{year} - {album}/{track:02d} - {title}.{ext}"
 
     async def album_info(browse_id, video_id=None):
@@ -244,52 +207,14 @@ async def test_ytdlp_backend_layout_lyrics_replaygain(ctx, settings, monkeypatch
     t = mutagen.File(path).tags
     assert t["album"] == ["Souvlaki"] and t["tracknumber"] == ["4/10"] and t["date"] == ["1993"]
     assert t["replaygain_track_gain"][0].endswith(" dB")
-    assert not os.path.exists(os.path.join(settings.discovery_dir, ".tmp", "vid1"))
-    assert await backends.get_backend(ctx).download(req) == path       # dedupe: reuse, no second download
-
-
-async def test_yubal_api_discovers_endpoint_from_openapi(ctx, settings):
-    settings.yubal_url, settings.downloader = "http://yubal.test", "yubal_api"
-    settings.yubal_data_dir = os.path.join(settings.music_dir, "_discovery")
-    spec = {"paths": {"/api/v1/jobs": {"get": {}, "post": {"requestBody": {"content": {"application/json": {
-        "schema": {"$ref": "#/components/schemas/JobCreate"}}}}}}},
-        "components": {"schemas": {"JobCreate": {"properties": {"url": {}, "max_items": {}}, "required": ["url"]}}}}
-    seen = {}
-
-    def handler(req: httpx.Request) -> httpx.Response:
-        p = req.url.path
-        if p == "/health":
-            return httpx.Response(200, json={})
-        if p == "/openapi.json":
-            return httpx.Response(200, json=spec)
-        if p == "/jobs":
-            return httpx.Response(405, json={"detail": "Method Not Allowed"})     # what the real server said
-        if p == "/api/v1/jobs" and req.method == "POST":
-            seen["body"] = req.content
-            make_audio(os.path.join(settings.yubal_data_dir, "S", "A", "01 - t.opus"), 10)
-            return httpx.Response(201, json={"id": "j1"})
-        if p == "/api/v1/jobs":
-            return httpx.Response(200, json=[{"id": "j1", "status": "completed"}])
-        return httpx.Response(404)
-    ctx.http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    req = backends.DLRequest(video_id="v", url="https://music.youtube.com/watch?v=v", title="t", artist="S")
-    path = await backends.get_backend(ctx).download(req)
-    assert path.endswith("01 - t.opus") and b"music.youtube.com" in seen["body"]
-
-
-def test_backend_choice(settings):
-    settings.downloader = "auto"
-    assert backends.choose(settings) == ("yubal_cli" if settings.yubal_cmd else "yubal_api" if settings.yubal_url else "ytdlp")
-    settings.yubal_cmd = "ssh x yubal download {url} {dest}"
-    assert backends.choose(settings) == "yubal_cli"
-    settings.downloader = "ytdlp"
-    assert backends.choose(settings) == "ytdlp"
+    assert not os.path.exists(os.path.join(settings.config_dir, "tmp", "vid1"))
+    assert await backends.get_backend(ctx).download(req) == path
 
 
 async def test_default_downloads_into_library_and_never_expires(ctx, settings, monkeypatch):
-    settings.discovery_subdir, settings.expire_days = "", 0          # the default: library root, no staging
+    settings.discovery_subdir, settings.expire_days = "", 0
     assert settings.discovery_dir == settings.music_dir and not settings.staging
-    settings.downloader, settings.path_template = "ytdlp", "{album_artist}/{year} - {album}/{track:02d} - {title}.{ext}"
+    settings.path_template = "{album_artist}/{year} - {album}/{track:02d} - {title}.{ext}"
     ctx.ytm.album_info = lambda *a, **k: _async({"album": "Souvlaki", "album_artist": "Slowdive", "year": "1993", "track": 4})
 
     async def fake_run(self, url, workdir):
@@ -302,8 +227,7 @@ async def test_default_downloads_into_library_and_never_expires(ctx, settings, m
     req = backends.DLRequest(video_id="v", url="u", title="Alison", artist="Slowdive", album="Souvlaki", album_id="x")
     path = await backends.get_backend(ctx).download(req)
     assert path == os.path.join(settings.music_dir, "Slowdive", "1993 - Souvlaki", "04 - Alison.opus")
-    assert not os.path.exists(os.path.join(settings.config_dir, "tmp", "v"))        # temp lives outside the library
-    # safety: with no staging folder, expiry/promote are inert even for an old retired row pointing at library files
+    assert not os.path.exists(os.path.join(settings.config_dir, "tmp", "v"))
     pid = ctx.db.insert("INSERT INTO playlists(kind,name,config_json,schedule_cron) VALUES('z','z','{}','* * * * *')")
     ctx.db.insert("INSERT INTO playlist_tracks(playlist_id,track_key,title,artist,status,file_path,added_at) "
                   "VALUES(?,?,?,?,'retired',?,?)", (pid, "k", "Alison", "Slowdive", path, time.time() - 999 * 86400))
