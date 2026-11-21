@@ -3,7 +3,7 @@ services:
     # Option A (default): build from the source in this folder.
     build: .
     # Option B: use the prebuilt image published by GitHub Actions (comment out `build` above).
-    # image: ghcr.io/giana20/DailyDig:latest
+    # image: ghcr.io/giana20/dailydig:latest
     container_name: dailydig
     restart: unless-stopped
     ports:
