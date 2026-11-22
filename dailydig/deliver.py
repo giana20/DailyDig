@@ -50,18 +50,8 @@ async def deliver_playlist(ctx, playlist_id: int, waits: int = 0) -> dict:
     if nd.configured and nd.enabled:
         try:
             if any(r["status"] == "downloaded" for r in ready):
-                await nd.start_scan(wait=True)
-            ids, missing = [], 0
-            for r in ready:
-                s = await nd.find_song(r["artist"], r["title"])
-                if s:
-                    ids.append(s["id"])
-                else:
-                    missing += 1
-            if ids:
-                out["navidrome_playlist"] = await nd.sync_playlist(pl["name"], ids)
-            out["not_in_navidrome"] = missing
-        except Exception as e:  # noqa: BLE001 - M3U8 is already on disk as the fallback path
+                await nd.start_scan(wait=True)   # scan imports the m3u8
+        except Exception as e:  # noqa: BLE001
             out["navidrome_error"] = f"{type(e).__name__}: {e}"
     ctx.db.execute("UPDATE playlist_tracks SET status='delivered' WHERE playlist_id=? AND status='downloaded'", (playlist_id,))
     return out
