@@ -26,6 +26,7 @@ from .runtime import Runtime
 
 log = logging.getLogger("dailydig.api")
 STATIC = os.path.join(os.path.dirname(__file__), "static")
+ICON_PATHS = {"/icon.svg", "/favicon.ico"}
 CONFIG_KEYS = {"size", "generators", "mode", "exploration", "cooldown_days", "pop_begin", "pop_end", "max_artist_plays",
                "include_library", "download", "jam_kinds", "days", "fresh_days", "use_ml", "one_per_artist", "lb_mode"}
 
@@ -57,7 +58,7 @@ def C(request: Request) -> Context:
 async def auth(request: Request, call_next):
     pw = get_settings().admin_password
     p = request.url.path
-    if pw and not (p.startswith("/apis/") or p == "/api/health"):
+    if pw and not (p.startswith("/apis/") or p == "/api/health" or p in ICON_PATHS):
         hdr = request.headers.get("authorization", "")
         ok = False
         if hdr.lower().startswith("basic "):
@@ -80,6 +81,13 @@ async def index():
 @app.get("/api/health")
 async def health():
     return {"ok": True, "version": __version__}
+
+
+@app.get("/icon.svg", include_in_schema=False)
+@app.get("/favicon.ico", include_in_schema=False)
+async def icon():
+    return FileResponse(os.path.join(STATIC, "icon.svg"), media_type="image/svg+xml",
+                        headers={"Cache-Control": "public, max-age=86400"})
 
 
 # ---- status / system -----------------------------------------------------------------------------
